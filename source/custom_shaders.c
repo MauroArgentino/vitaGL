@@ -23,8 +23,8 @@
 
 #include "shared.h"
 
-#define MAX_CUSTOM_SHADERS 32 // Maximum number of linkable custom shaders
-#define MAX_SHADER_PARAMS 16 // Maximum number of parameters per custom shader
+#define MAX_CUSTOM_SHADERS 64 // Maximum number of linkable custom shaders
+#define MAX_SHADER_PARAMS 8 // Maximum number of parameters per custom shader
 
 // Internal stuffs
 void *frag_uniforms = NULL;
@@ -48,6 +48,7 @@ typedef struct shader {
 	SceGxmShaderPatcherId id;
 	const SceGxmProgram *prog;
 	uint32_t size;
+	char *log;
 } shader;
 
 // Program struct holding vertex/fragment shader info
@@ -55,11 +56,12 @@ typedef struct program {
 	shader *vshader;
 	shader *fshader;
 	GLboolean valid;
-	SceGxmVertexAttribute attr[16];
-	SceGxmVertexStream stream[16];
+	SceGxmVertexAttribute attr[MAX_SHADER_PARAMS];
+	SceGxmVertexStream stream[MAX_SHADER_PARAMS];
 	SceGxmVertexProgram *vprog;
 	SceGxmFragmentProgram *fprog;
 	GLuint attr_num;
+	GLuint stream_num;
 	const SceGxmProgramParameter *wvp;
 	uniform *uniforms;
 	uniform *last_uniform;
@@ -76,6 +78,7 @@ void resetCustomShaders(void) {
 	int i;
 	for (i = 0; i < MAX_CUSTOM_SHADERS; i++) {
 		shaders[i].valid = 0;
+		shaders[i].log = NULL;
 		progs[i >> 1].valid = 0;
 	}
 }
@@ -102,11 +105,13 @@ void reloadCustomShader(void) {
 	program *p = &progs[cur_program - 1];
 	sceGxmSetVertexProgram(gxm_context, p->vprog);
 	sceGxmSetFragmentProgram(gxm_context, p->fprog);
+	vert_uniforms = NULL;
+	frag_uniforms = NULL;
 }
 
 void _vglDrawObjects_CustomShadersIMPL(GLenum mode, GLsizei count, GLboolean implicit_wvp) {
-	program *p = &progs[cur_program - 1];
 	if (implicit_wvp) {
+		program *p = &progs[cur_program - 1];
 		if (mvp_modified) {
 			matrix4x4_multiply(mvp_matrix, projection_matrix, modelview_matrix);
 			mvp_modified = GL_FALSE;
@@ -118,6 +123,26 @@ void _vglDrawObjects_CustomShadersIMPL(GLenum mode, GLsizei count, GLboolean imp
 		sceGxmSetUniformDataF(vert_uniforms, p->wvp, 0, 16, (const float *)mvp_matrix);
 	}
 }
+
+#if defined(HAVE_SHARK) && defined(HAVE_SHARK_LOG)
+static char *shark_log = NULL;
+void shark_log_cb(const char *msg, shark_log_level msg_level, int line) {
+	uint8_t append = shark_log != NULL;
+	uint32_t size = (append ? strlen(shark_log) : 0) + strlen(msg);
+	shark_log = append ? realloc(shark_log, size) : malloc(size);
+	switch (msg_level) {
+	case SHARK_LOG_INFO:
+		sprintf(shark_log, "%s%sI] %s on line %d", append ? shark_log : "", append ? "\n" : "", msg, line);
+		break;
+	case SHARK_LOG_WARNING:
+		sprintf(shark_log, "%s%sW] %s on line %d", append ? shark_log : "", append ? "\n" : "", msg, line);
+		break;
+	case SHARK_LOG_ERROR:
+		sprintf(shark_log, "%s%sE] %s on line %d", append ? shark_log : "", append ? "\n" : "", msg, line);
+		break;
+	}
+}
+#endif
 
 /*
  * ------------------------------
@@ -172,9 +197,28 @@ void glGetShaderiv(GLuint handle, GLenum pname, GLint *params) {
 	case GL_COMPILE_STATUS:
 		*params = s->prog ? GL_TRUE : GL_FALSE;
 		break;
+	case GL_INFO_LOG_LENGTH:
+		*params = s->log ? strlen(s->log) : 0;
+		break;
 	default:
 		SET_GL_ERROR(GL_INVALID_ENUM)
 		break;
+	}
+}
+
+void glGetShaderInfoLog(GLuint handle, GLsizei maxLength, GLsizei *length, GLchar *infoLog) {
+#ifndef SKIP_ERROR_HANDLING
+	if (maxLength < 0) {
+		SET_GL_ERROR(GL_INVALID_VALUE)
+	}
+#endif
+
+	// Grabbing passed shader
+	shader *s = &shaders[handle - 1];
+	
+	if (s->log) {
+		*length = min(strlen(s->log), maxLength);
+		memcpy_neon(infoLog, s->log, *length);
 	}
 }
 
@@ -192,8 +236,8 @@ void glShaderSource(GLuint handle, GLsizei count, const GLchar * const *string, 
 	shader *s = &shaders[handle - 1];
 	
 	// Temporarily setting prog to point to the shader source
-	s->prog = (SceGxmProgram *)string;
-	s->size = *length;
+	s->prog = (SceGxmProgram *)*string;
+	s->size = length ? *length : strlen(*string);
 }
 
 void glShaderBinary(GLsizei count, const GLuint *handles, GLenum binaryFormat, const void *binary, GLsizei length) {
@@ -207,6 +251,7 @@ void glShaderBinary(GLsizei count, const GLuint *handles, GLenum binaryFormat, c
 	s->prog = sceGxmShaderPatcherGetProgramFromId(s->id);
 }
 
+uint8_t shader_idxs = 0;
 void glCompileShader(GLuint handle) {
 	// If vitaShaRK is not enabled, we just error out
 	if (!is_shark_online) {
@@ -216,15 +261,20 @@ void glCompileShader(GLuint handle) {
 	// Grabbing passed shader
 	shader *s = &shaders[handle - 1];
 	
+	// Compiling shader source
 	s->prog = shark_compile_shader((const char*)s->prog, &s->size, s->type == GL_FRAGMENT_SHADER ? SHARK_FRAGMENT_SHADER : SHARK_VERTEX_SHADER);
 	if (s->prog) {
 		SceGxmProgram *res = (SceGxmProgram *)malloc(s->size);
 		memcpy_neon((void *)res, (void *)s->prog, s->size);
 		s->prog = res;
-		shark_clear_output();
 		sceGxmShaderPatcherRegisterProgram(gxm_shader_patcher, s->prog, &s->id);
 		s->prog = sceGxmShaderPatcherGetProgramFromId(s->id);
 	}
+#ifdef HAVE_SHARK_LOG
+	s->log = shark_log;
+	shark_log = NULL;
+#endif
+	shark_clear_output();
 #endif
 }
 
@@ -236,7 +286,9 @@ void glDeleteShader(GLuint shad) {
 	if (s->valid) {
 		sceGxmShaderPatcherForceUnregisterProgram(gxm_shader_patcher, s->id);
 		free((void *)s->prog);
+		if (s->log) free(s->log);
 	}
+	s->log = NULL;
 	s->valid = GL_FALSE;
 }
 
@@ -308,7 +360,7 @@ void glLinkProgram(GLuint progr) {
 	// Creating fragment and vertex program via sceGxmShaderPatcher
 	sceGxmShaderPatcherCreateVertexProgram(gxm_shader_patcher,
 		p->vshader->id, p->attr, p->attr_num,
-		p->stream, p->attr_num, &p->vprog);
+		p->stream, p->stream_num, &p->vprog);
 	sceGxmShaderPatcherCreateFragmentProgram(gxm_shader_patcher,
 		p->fshader->id, SCE_GXM_OUTPUT_REGISTER_FORMAT_UCHAR4,
 		msaa_mode, NULL, p->vshader->prog,
@@ -318,7 +370,7 @@ void glLinkProgram(GLuint progr) {
 void glUseProgram(GLuint prog) {
 	// Setting current custom program to passed program
 	cur_program = prog;
-
+			
 	// Setting in-use vertex and fragment program in sceGxm
 	reloadCustomShader();
 }
@@ -329,9 +381,6 @@ GLint glGetUniformLocation(GLuint prog, const GLchar *name) {
 
 	uniform *res = (uniform *)malloc(sizeof(uniform));
 	res->chain = NULL;
-	if (p->last_uniform != NULL)
-		p->last_uniform->chain = (void *)res;
-	p->last_uniform = res;
 
 	// Checking if parameter is a vertex or fragment related one
 	res->ptr = sceGxmProgramFindParameterByName(p->vshader->prog, name);
@@ -340,6 +389,15 @@ GLint glGetUniformLocation(GLuint prog, const GLchar *name) {
 		res->ptr = sceGxmProgramFindParameterByName(p->fshader->prog, name);
 		res->isVertex = GL_FALSE;
 	}
+	
+	if (res->ptr == NULL) {
+		free(res);
+		return -1;
+	}
+		
+	if (p->last_uniform != NULL)
+		p->last_uniform->chain = (void *)res;
+	p->last_uniform = res;
 
 	return (GLint)res;
 }
@@ -418,6 +476,25 @@ void glUniform3fv(GLint location, GLsizei count, const GLfloat *value) {
 	}
 }
 
+void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) {
+	// Grabbing passed uniform
+	uniform *u = (uniform *)location;
+	if (u->ptr == NULL)
+		return;
+
+	// Setting passed value to desired uniform
+	float v[4] = {v0, v1, v2, v3};
+	if (u->isVertex) {
+		if (vert_uniforms == NULL)
+			sceGxmReserveVertexDefaultUniformBuffer(gxm_context, &vert_uniforms);
+		sceGxmSetUniformDataF(vert_uniforms, u->ptr, 0, 4, v);
+	} else {
+		if (frag_uniforms == NULL)
+			sceGxmReserveFragmentDefaultUniformBuffer(gxm_context, &frag_uniforms);
+		sceGxmSetUniformDataF(frag_uniforms, u->ptr, 0, 4, v);
+	}
+}
+
 void glUniform4fv(GLint location, GLsizei count, const GLfloat *value) {
 	// Grabbing passed uniform
 	uniform *u = (uniform *)location;
@@ -460,7 +537,8 @@ void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, cons
  * ------------------------------
  */
 
-void vglBindPackedAttribLocation(GLuint prog, GLuint index, const GLchar *name, const GLuint num, const GLenum type, GLuint offset, GLint stride) {
+// Equivalent of glBindAttribLocation but for sceGxm architecture
+void vglBindAttribLocation(GLuint prog, GLuint index, const GLchar *name, const GLuint num, const GLenum type) {
 	// Grabbing passed program
 	program *p = &progs[prog - 1];
 	SceGxmVertexAttribute *attributes = &p->attr[index];
@@ -468,9 +546,52 @@ void vglBindPackedAttribLocation(GLuint prog, GLuint index, const GLchar *name, 
 
 	// Looking for desired parameter in requested program
 	const SceGxmProgramParameter *param = sceGxmProgramFindParameterByName(p->vshader->prog, name);
+	if (param == NULL) return;
 
 	// Setting stream index and offset values
 	attributes->streamIndex = index;
+	attributes->offset = 0;
+
+	// Detecting attribute format and size
+	int bpe;
+	switch (type) {
+	case GL_FLOAT:
+		attributes->format = SCE_GXM_ATTRIBUTE_FORMAT_F32;
+		bpe = sizeof(float);
+		break;
+	case GL_UNSIGNED_BYTE:
+		attributes->format = SCE_GXM_ATTRIBUTE_FORMAT_U8N;
+		bpe = sizeof(uint8_t);
+		break;
+	default:
+		SET_GL_ERROR(GL_INVALID_ENUM)
+		break;
+	}
+
+	// Setting various info about the stream
+	attributes->componentCount = num;
+	attributes->regIndex = sceGxmProgramParameterGetResourceIndex(param);
+	streams->stride = bpe * num;
+	streams->indexSource = SCE_GXM_INDEX_SOURCE_INDEX_16BIT;
+	if (index >= p->attr_num) {
+		p->attr_num = index + 1;
+		p->stream_num = index + 1;
+	}
+}
+
+// Equivalent of glBindAttribLocation but for sceGxm architecture when packed attributes are used
+void vglBindPackedAttribLocation(GLuint prog, const GLchar *name, const GLuint num, const GLenum type, GLuint offset, GLint stride) {
+	// Grabbing passed program
+	program *p = &progs[prog - 1];
+	SceGxmVertexAttribute *attributes = &p->attr[p->attr_num];
+	SceGxmVertexStream *streams = &p->stream[0];
+
+	// Looking for desired parameter in requested program
+	const SceGxmProgramParameter *param = sceGxmProgramFindParameterByName(p->vshader->prog, name);
+	if (param == NULL) return;
+
+	// Setting stream index and offset values
+	attributes->streamIndex = 0;
 	attributes->offset = offset;
 
 	// Detecting attribute format and size
@@ -494,13 +615,8 @@ void vglBindPackedAttribLocation(GLuint prog, GLuint index, const GLchar *name, 
 	attributes->regIndex = sceGxmProgramParameterGetResourceIndex(param);
 	streams->stride = stride ? stride : bpe * num;
 	streams->indexSource = SCE_GXM_INDEX_SOURCE_INDEX_16BIT;
-	if (index >= p->attr_num)
-		p->attr_num = index + 1;
-}
-
-// Equivalent of glBindAttribLocation but for sceGxm architecture
-void vglBindAttribLocation(GLuint prog, GLuint index, const GLchar *name, const GLuint num, const GLenum type) {
-	vglBindPackedAttribLocation(prog, index, name, num, type, 0, 0);
+	p->stream_num = 1;
+	p->attr_num++;
 }
 
 // Equivalent of glVertexAttribPointer but for sceGxm architecture

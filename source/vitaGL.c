@@ -681,11 +681,12 @@ void vglInitWithCustomSizes(uint32_t gpu_pool_size, int width, int height, int r
 		}
 		texture_units[i].env_mode = MODULATE;
 		texture_units[i].tex_id = 0;
-		texture_units[i].enabled = 0;
+		texture_units[i].enabled = GL_FALSE;
 		texture_units[i].min_filter = SCE_GXM_TEXTURE_FILTER_LINEAR;
 		texture_units[i].mag_filter = SCE_GXM_TEXTURE_FILTER_LINEAR;
 		texture_units[i].u_mode = SCE_GXM_TEXTURE_ADDR_REPEAT;
 		texture_units[i].v_mode = SCE_GXM_TEXTURE_ADDR_REPEAT;
+		texture_units[i].lod_bias = GL_MAX_TEXTURE_LOD_BIAS; // sceGxm range is 0 - (GL_MAX_TEXTURE_LOD_BIAS*2 + 1) 
 	}
 
 	// Init custom shaders
@@ -2057,9 +2058,13 @@ void vglDrawObjects(GLenum mode, GLsizei count, GLboolean implicit_wvp) {
 		if (cur_program != 0) {
 			_vglDrawObjects_CustomShadersIMPL(mode, count, implicit_wvp);
 			sceGxmSetFragmentTexture(gxm_context, 0, &tex_unit->textures[texture2d_idx].gxm_tex);
+			
+			// TEXUNIT1 support for custom shaders
+			texture_unit *tex_unit2 = &texture_units[client_texture_unit + 1];
+			int texture2d_idx2 = tex_unit2->tex_id;
+			if (tex_unit2->textures[texture2d_idx2].valid) sceGxmSetFragmentTexture(gxm_context, 1, &tex_unit2->textures[texture2d_idx2].gxm_tex);
+			
 			sceGxmDraw(gxm_context, gxm_p, SCE_GXM_INDEX_FORMAT_U16, tex_unit->index_object, count);
-			vert_uniforms = NULL;
-			frag_uniforms = NULL;
 		} else {
 			if (tex_unit->vertex_array_state) {
 				if (mvp_modified) {

@@ -22,6 +22,14 @@ ifeq ($(NO_DEBUG),1)
 CFLAGS  += -DSKIP_ERROR_HANDLING
 endif
 
+ifeq ($(HAVE_SHARK),1)
+CFLAGS  += -DHAVE_SHARK
+endif
+
+ifeq ($(HAVE_SHARK),2)
+CFLAGS  += -DHAVE_SHARK -DHAVE_SHARK_LOG
+endif
+
 all: $(TARGET).a
 
 $(TARGET).a: $(OBJS)

@@ -59,6 +59,8 @@ extern "C" {
 #define GL_ZERO                           0
 #define GL_ONE                            1
 
+#define GL_NONE                           0
+
 #define GL_POINTS                         0x0000
 #define GL_LINES                          0x0001
 #define GL_LINE_LOOP                      0x0002
@@ -232,6 +234,7 @@ extern "C" {
 #define GL_TEXTURE30                      0x84DE
 #define GL_TEXTURE31                      0x84DF
 #define GL_ACTIVE_TEXTURE                 0x84E0
+#define GL_TEXTURE_LOD_BIAS               0x8501
 #define GL_INCR_WRAP                      0x8507
 #define GL_MIRROR_CLAMP_EXT               0x8742
 #define GL_DECR_WRAP                      0x8508
@@ -250,12 +253,14 @@ extern "C" {
 #define GL_VERTEX_SHADER                  0x8B31
 #define GL_SHADER_TYPE                    0x8B4F
 #define GL_COMPILE_STATUS                 0x8B81
+#define GL_INFO_LOG_LENGTH                0x8B84
 #define GL_READ_FRAMEBUFFER               0x8CA8
 #define GL_DRAW_FRAMEBUFFER               0x8CA9
 #define GL_COLOR_ATTACHMENT0              0x8CE0
 #define GL_FRAMEBUFFER                    0x8D40
 
-#define GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS 32
+#define GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS   32
+#define GL_MAX_TEXTURE_LOD_BIAS               31
 
 // Aliases
 #define GL_CLAMP GL_CLAMP_TO_EDGE
@@ -333,6 +338,7 @@ void glGetBooleanv(GLenum pname, GLboolean *params);
 void glGetFloatv(GLenum pname, GLfloat *data);
 GLenum glGetError(void);
 void glGetIntegerv(GLenum pname, GLint *data);
+void glGetShaderInfoLog(GLuint handle, GLsizei maxLength, GLsizei *length, GLchar *infoLog);
 void glGetShaderiv(GLuint handle, GLenum pname, GLint *params);
 const GLubyte *glGetString(GLenum name);
 GLint glGetUniformLocation(GLuint prog, const GLchar *name);
@@ -377,6 +383,7 @@ void glUniform1f(GLint location, GLfloat v0);
 void glUniform1i(GLint location, GLint v0);
 void glUniform2fv(GLint location, GLsizei count, const GLfloat *value);
 void glUniform3fv(GLint location, GLsizei count, const GLfloat *value);
+void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
 void glUniform4fv(GLint location, GLsizei count, const GLfloat *value);
 void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value);
 void glUseProgram(GLuint program);
@@ -402,7 +409,7 @@ void vglVertexPointerMapped(const GLvoid *pointer);
 
 // VGL_EXT_gxp_shaders extension implementation
 void vglBindAttribLocation(GLuint prog, GLuint index, const GLchar *name, const GLuint num, const GLenum type);
-void vglBindPackedAttribLocation(GLuint prog, GLuint index, const GLchar *name, const GLuint num, const GLenum type, GLuint offset, GLint stride);
+void vglBindPackedAttribLocation(GLuint prog, const GLchar *name, const GLuint num, const GLenum type, GLuint offset, GLint stride);
 void vglVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, GLuint count, const GLvoid *pointer);
 void vglVertexAttribPointerMapped(GLuint index, const GLvoid *pointer);
 
